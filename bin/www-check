@@ -1,0 +1,134 @@
+#!/bin/sh -e
+#L:
+#L:  MIT License
+#L:  
+#l:  Bug reports, feature requests to gemini|https://harkadev.com/oss
+#l:  Copyright (c) 2022 Harkaitz Agirre, harkaitz.aguirre@gmail.com
+#L:
+#L:  Permission is hereby granted, free of charge, to any person obtaining
+#L:  a copy of this software and associated documentation files (the
+#L:  "Software"), to deal in the Software without restriction, including
+#L:  without limitation the rights to use, copy, modify, merge, publish,
+#L:  distribute, sublicense, and/or sell copies of the Software, and to
+#L:  permit persons to whom the Software is furnished to do so, subject to
+#L:  the following conditions:
+#L:
+#L:  The above copyright notice and this permission notice shall be
+#L:  included in all copies or substantial portions of the Software.
+#L:
+#L:  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#L:  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#L:  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#L:  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#L:  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#L:  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#L:  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+##:
+#h: Usage: $0 ...
+#h:
+#h: With this utility you can check whether a website is working
+#h: or not and whether the SSL certificate is up to date.
+#h:
+#h: You can write an script that checks your managed sites
+#h: and put it in your crontab(1p).
+#h:
+#h: ... wget URL REGEX1 ... : Download page and check the words are
+#h:                           in place in the html.
+#h: ... ssl-edate DOMAIN    : Get the SSL certificate expiration date.
+www_check() {
+    local cmd="$1"
+    shift
+    if ! which wget >/dev/null 2>&1; then
+        error "Can't find the 'wget' utility."
+        return 1
+    fi
+    if ! which openssl >/dev/null 2>&1; then
+        error "Can't find the 'openssl' utility."
+        return 1
+    fi
+    if ! which timeout >/dev/null 2>&1; then
+        error "Can't find the 'timeout' utility."
+        return 1
+    fi
+    
+    case "${cmd}" in
+        wget)      www_check_wget "$@"                     ;;
+        ssl-edate) www_check_ssl_edate "$@"                ;;
+        *)         error "Invalid argument '${cmd}'."
+                   return 1;;
+    esac
+}
+
+
+## -----------------------------------------------------------------------------
+www_check_wget() {
+    ## Get the URL.
+    if test -n "${1}"; then
+        local url="${1}"
+        shift
+    else
+        error "Please specify an URL."
+        return 1
+    fi
+    ## Download the site.
+    local html="`wget -q -O - "${url}" || true`"
+    if test ! -n "${html}"; then
+        error "Failed downloading from '${url}'."
+        return 1
+    fi
+    ## Check all the words are in place.
+    while test -n "$1";do
+        local regex="$1"; shift
+        local match="`echo "${html}" | grep "${regex}"`"
+        if test ! -n "${match}";then
+            local file="/tmp/www-check-`whoami`.html"
+            printf '%s\n' "${html}" > "${file}"
+            error "Didn't find '${regex}' in '${url}'."
+            error "Check ${file}."
+            return 1
+        fi
+        echo "'${url}' working properly."
+    done
+}
+www_check_ssl_edate() {
+    ## Get the domain.
+    if test -n "${1}"; then
+        local domain="$1"
+    else
+        error "Please specify a domain."
+        return 1
+    fi
+    ## Download the certificate.
+    local cert="`                        \
+        timeout 4                        \
+            openssl s_client             \
+                -connect "${domain}:443" \
+                -servername "${domain}"  \
+                2>/dev/null`"
+    if test ! -n "${cert}"; then
+        return 1
+    fi
+    ## Get the expiration date.
+    local edate="`                       \
+            printf '%s\n' "${cert}"      \
+            | openssl x509 -noout -dates \
+            | sed -n 's|^notAfter=||p'`"
+    if test -n "${edate}";then
+        echo "${edate}"
+    else
+        return 1
+    fi
+}
+
+## -----------------------------------------------------------------------------
+error() { echo "${SCRNAME}: error: $*" >&2; }
+SCRNAME="`basename "$0"`"
+if test @"${SCRNAME}" = @"www-check";then
+    if test -n "$1";then
+        www_check "$@"
+    else
+        sed -n 's/^ *#h: \{0,1\}//p' "$0" | sed "s|\\\$0|`basename $0`|g"
+        echo ""
+        sed -n 's/^ *#l: \{0,2\}//p' "$0"
+    fi
+fi
